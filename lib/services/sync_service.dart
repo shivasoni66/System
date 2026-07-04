@@ -5,6 +5,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 class SyncService {
   final String Function() getHost;
+  final String Function() getPlayerName;
   
   WebSocketChannel? _channel;
   bool _isConnected = false;
@@ -15,6 +16,7 @@ class SyncService {
 
   SyncService({
     required this.getHost,
+    required this.getPlayerName,
     required this.onStateReceived,
     required this.onConnectionStateChanged,
   });
@@ -27,6 +29,13 @@ class SyncService {
     _isConnecting = true;
     
     try {
+      final String pName = getPlayerName();
+      if (pName.trim().isEmpty) {
+        debugPrint('[SYSTEM SYNC] Datalink delayed: Player ID empty.');
+        _isConnecting = false;
+        return;
+      }
+
       final String rawHost = getHost();
       // Remove any user-typed protocol schemes to prevent URI format issues
       final String cleanedHost = rawHost
@@ -38,7 +47,9 @@ class SyncService {
 
       // Automatically apply secure WebSocket (wss) for cloud hosts (like Render)
       final String scheme = cleanedHost.contains('localhost') || cleanedHost.contains('127.0.0.1') ? 'ws' : 'wss';
-      final String fullUrl = '$scheme://$cleanedHost/sync';
+      
+      final String encodedName = Uri.encodeComponent(pName);
+      final String fullUrl = '$scheme://$cleanedHost/sync?name=$encodedName';
 
       debugPrint('[SYSTEM SYNC] Attempting datalink connection: $fullUrl');
       _channel = WebSocketChannel.connect(Uri.parse(fullUrl));

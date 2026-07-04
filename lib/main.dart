@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'providers/game_provider.dart';
 import 'services/notification_service.dart';
 import 'screens/navigation_holder.dart';
+import 'screens/onboarding_screen.dart';
 import 'widgets/hud_components.dart';
 
 void main() async {
@@ -107,7 +108,9 @@ class MyApp extends StatelessWidget {
                 ),
               ),
             ),
-            home: const NavigationHolderPage(),
+            home: provider.playerName.isEmpty
+                ? const OnboardingScreen()
+                : const NavigationHolderPage(),
           );
         },
       ),

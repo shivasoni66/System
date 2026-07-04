@@ -40,7 +40,7 @@ class GameProvider extends ChangeNotifier {
   // Settings
   bool _isSoundEnabled = true;
   int _activeThemeIndex = 0; // 0: Midnight Cobalt, 1: Deep Ocean, 2: Electric Cyan, 3: Sapphire Knight, 4: Neon Ice
-  String _serverAddress = 'localhost:8080'; // Default backend server host
+  String _serverAddress = 'system-5jlk.onrender.com'; // Deployed Render backend server host
 
   // Metrics/Statistics
   int _totalXpEarned = 2350;
@@ -61,6 +61,7 @@ class GameProvider extends ChangeNotifier {
   GameProvider() {
     _syncService = SyncService(
       getHost: () => _serverAddress,
+      getPlayerName: () => _playerName,
       onStateReceived: (remoteState) {
         final remoteTotalXp = remoteState['totalXpEarned'] as int? ?? _totalXpEarned;
         if (remoteTotalXp != _totalXpEarned) {
@@ -245,6 +246,39 @@ class GameProvider extends ChangeNotifier {
     // Re-establish WebSocket datalink connection
     _syncService.disconnect();
     _syncService.connect();
+    notifyListeners();
+  }
+
+  // Initializes a new player profile on first start
+  Future<void> initializePlayerProfile(String name, String chosenClass) async {
+    _playerName = name.trim();
+    _playerClass = chosenClass.trim();
+    _characterLevel = 1; // Start at Level 1 on first initialization
+    _characterXp = 0.0;
+    _totalXpEarned = 0;
+    
+    // Reset all attributes
+    _stats.forEach((key, value) {
+      value.level = 1;
+      value.xp = 0.0;
+    });
+    _quests.clear();
+    _punishments.clear();
+    _notifications.clear();
+    _contributionHistory.clear();
+
+    _setupDefaultQuests();
+    _initializeAchievements();
+    _initializeEquipment();
+    _lastResetDate = DateTime.now();
+
+    _addNotification('SYSTEM INITIALIZED', 'Welcome $_playerName! Specialization $_playerClass registered.');
+    
+    // Re-establish WebSocket datalink connection under the new name
+    _syncService.disconnect();
+    _syncService.connect();
+    
+    await _saveState();
     notifyListeners();
   }
 
@@ -940,10 +974,16 @@ class GameProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
 
       // Read server address configuration first
-      _serverAddress = prefs.getString('serverAddress') ?? 'localhost:8080';
+      _serverAddress = prefs.getString('serverAddress') ?? 'system-5jlk.onrender.com';
 
       // Connect WebSocket to Java backend
       _syncService.connect();
+
+      // Setup default configurations first
+      _setupDefaultQuests();
+      _initializeAchievements();
+      _initializeEquipment();
+      _lastResetDate = DateTime.now();
 
       // Load instant local cache first
       final localDataStr = prefs.getString('local_player_state');
@@ -951,10 +991,7 @@ class GameProvider extends ChangeNotifier {
         final decoded = jsonDecode(localDataStr) as Map<String, dynamic>;
         _parseStateFromJson(decoded);
       } else {
-        _setupDefaultQuests();
-        _initializeAchievements();
-        _initializeEquipment();
-        _lastResetDate = DateTime.now();
+        _playerName = '';
       }
       
       checkDailyReset();
@@ -1017,15 +1054,17 @@ class GameProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
 
-    _characterLevel = 8;
-    _characterXp = 2350.0;
-    _totalXpEarned = 2350;
+    _playerName = '';
+    _playerClass = 'Self Improver';
+    _characterLevel = 1;
+    _characterXp = 0.0;
+    _totalXpEarned = 0;
     _questsCompletedCount = 0;
     _punishmentsResolvedCount = 0;
     _longestStreak = 0;
     _totalDaysPlayed = 1;
     _consecutiveCleanDays = 0;
-    _serverAddress = 'localhost:8080';
+    _serverAddress = 'system-5jlk.onrender.com';
 
     _stats.forEach((key, value) {
       value.level = 1;

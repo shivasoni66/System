@@ -5,8 +5,28 @@ import '../providers/game_provider.dart';
 import '../widgets/hud_components.dart';
 import 'laser_divider.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  late TextEditingController _serverController;
+
+  @override
+  void initState() {
+    super.initState();
+    final provider = Provider.of<GameProvider>(context, listen: false);
+    _serverController = TextEditingController(text: provider.serverAddress);
+  }
+
+  @override
+  void dispose() {
+    _serverController.dispose();
+    super.dispose();
+  }
 
   Color _getThemePrimaryColor(int themeIdx) {
     switch (themeIdx) {
@@ -59,6 +79,11 @@ class SettingsScreen extends StatelessWidget {
     final notifications = provider.notifications;
     final primaryColor = _getThemePrimaryColor(provider.activeThemeIndex);
 
+    // Keep controller text in sync if provider changes programmatically
+    if (_serverController.text != provider.serverAddress) {
+      _serverController.text = provider.serverAddress;
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -110,6 +135,76 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ],
                 ),
+                const Divider(color: Color(0xFF1B264A), height: 24),
+                
+                // Holographic Server Connection Field
+                Text(
+                  'DATALINK SYSTEM HOST:',
+                  style: GoogleFonts.orbitron(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _serverController,
+                        style: GoogleFonts.exo2(color: Colors.white, fontSize: 12),
+                        decoration: InputDecoration(
+                          hintText: 'e.g. localhost:8080 or name.onrender.com',
+                          hintStyle: GoogleFonts.exo2(color: Colors.grey, fontSize: 11),
+                          prefixIcon: Icon(Icons.dns, color: primaryColor, size: 16),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(4),
+                            borderSide: const BorderSide(color: Color(0xFF1B264A), width: 1.0),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(4),
+                            borderSide: BorderSide(color: primaryColor, width: 1.2),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        ),
+                        onSubmitted: (value) {
+                          provider.updateServerAddress(value);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              backgroundColor: primaryColor,
+                              content: Text(
+                                'Datalink host updated: $value. Reconnecting...',
+                                style: GoogleFonts.orbitron(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Live Status Box
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: provider.isRemoteConnected ? Colors.green : Colors.redAccent,
+                          width: 1.0,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
+                        color: provider.isRemoteConnected 
+                            ? Colors.green.withOpacity(0.06) 
+                            : Colors.redAccent.withOpacity(0.06),
+                      ),
+                      child: Icon(
+                        provider.isRemoteConnected ? Icons.wifi : Icons.wifi_off,
+                        color: provider.isRemoteConnected ? Colors.green : Colors.redAccent,
+                        size: 16,
+                      ),
+                    ),
+                  ],
+                ),
+                
                 const Divider(color: Color(0xFF1B264A), height: 24),
                 Text(
                   'COMPATIBLE INTERFACES:',
