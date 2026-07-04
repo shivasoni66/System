@@ -1,12 +1,11 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
 import '../services/notification_service.dart';
-import '../services/mongodb_service.dart';
+import '../services/sync_service.dart';
 
 class GameProvider extends ChangeNotifier {
   // Stats
@@ -41,6 +40,7 @@ class GameProvider extends ChangeNotifier {
   // Settings
   bool _isSoundEnabled = true;
   int _activeThemeIndex = 0; // 0: Midnight Cobalt, 1: Deep Ocean, 2: Electric Cyan, 3: Sapphire Knight, 4: Neon Ice
+  String _serverAddress = 'localhost:8080'; // Default backend server host
 
   // Metrics/Statistics
   int _totalXpEarned = 2350;
@@ -53,20 +53,38 @@ class GameProvider extends ChangeNotifier {
   // Date of last reset check
   DateTime? _lastResetDate;
 
-  // Async Initialization & Sync Timer
+  // Async Initialization & Sync Service
   late Future<void> initialization;
-  Timer? _syncTimer;
-  bool _isSyncing = false;
+  late SyncService _syncService;
+  bool _isRemoteConnected = false;
 
   GameProvider() {
+    _syncService = SyncService(
+      getHost: () => _serverAddress,
+      onStateReceived: (remoteState) {
+        final remoteTotalXp = remoteState['totalXpEarned'] as int? ?? _totalXpEarned;
+        if (remoteTotalXp != _totalXpEarned) {
+          _parseStateFromJson(remoteState);
+          _saveState(syncToRemote: false);
+          notifyListeners();
+        }
+      },
+      onConnectionStateChanged: (connected) {
+        _isRemoteConnected = connected;
+        if (connected) {
+          _addNotification('SYSTEM DATALINK ACTIVE', 'Holographic WebSocket synchronization established.');
+        } else {
+          _addNotification('SYSTEM DATALINK OFFLINE', 'Running in Local Cache mode. Syncing on reconnect.');
+        }
+        notifyListeners();
+      },
+    );
     initialization = _loadState();
-    // Real-time remote pull sync every 8 seconds
-    _syncTimer = Timer.periodic(const Duration(seconds: 8), (_) => _syncWithRemote());
   }
 
   @override
   void dispose() {
-    _syncTimer?.cancel();
+    _syncService.disconnect();
     super.dispose();
   }
 
@@ -90,7 +108,6 @@ class GameProvider extends ChangeNotifier {
     // Dispatch native system notification
     NotificationService().showInstantNotification(title: title, body: message);
 
-    // Keep notification log size within reasonable limits
     if (_notifications.length > 50) {
       _notifications.removeLast();
     }
@@ -125,6 +142,8 @@ class GameProvider extends ChangeNotifier {
   Map<String, String> get contributionHistory => _contributionHistory;
   bool get isSoundEnabled => _isSoundEnabled;
   int get activeThemeIndex => _activeThemeIndex;
+  String get serverAddress => _serverAddress;
+  bool get isRemoteConnected => _isRemoteConnected;
 
   // Statistics getters
   int get totalXpEarned => _totalXpEarned;
@@ -217,6 +236,18 @@ class GameProvider extends ChangeNotifier {
     return _quotes[dayOfYear % _quotes.length];
   }
 
+  // Updates the server endpoint address and reconnects the sync service
+  void updateServerAddress(String newAddress) {
+    if (newAddress.trim().isEmpty) return;
+    _serverAddress = newAddress.trim();
+    _saveState();
+    
+    // Re-establish WebSocket datalink connection
+    _syncService.disconnect();
+    _syncService.connect();
+    notifyListeners();
+  }
+
   // Core Progression Loops
   void _addCharacterXp(double amount) {
     final boostedAmount = amount * _overallXpMultiplier;
@@ -229,7 +260,7 @@ class GameProvider extends ChangeNotifier {
       _playSystemSound(SystemSoundType.click); 
       _addNotification(
         'CHARACTER LEVEL UP!',
-        'SYSTEM notification: Shiva leveled up to Level $_characterLevel! New rank available.',
+        'SYSTEM notification: Shiva Leveled up to Level $_characterLevel! Custom titles updated.',
       );
       _checkAchievements();
     }
@@ -848,6 +879,7 @@ class GameProvider extends ChangeNotifier {
       _characterXp = (data['characterXp'] as num? ?? 2350.0).toDouble();
       _isSoundEnabled = data['isSoundEnabled'] as bool? ?? true;
       _activeThemeIndex = data['activeThemeIndex'] as int? ?? 0;
+      _serverAddress = data['serverAddress'] as String? ?? 'localhost:8080';
 
       _totalXpEarned = data['totalXpEarned'] as int? ?? 2350;
       _questsCompletedCount = data['questsCompletedCount'] as int? ?? 0;
@@ -902,46 +934,18 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
-  // Real-time synchronization method called periodically
-  Future<void> _syncWithRemote() async {
-    if (_isSyncing) return;
-    _isSyncing = true;
-    try {
-      final remoteData = await MongoDBService.fetchPlayerState();
-      if (remoteData != null) {
-        final remoteTotalXp = remoteData['totalXpEarned'] as int? ?? _totalXpEarned;
-        
-        // Sync to local state if remote has different progress
-        if (remoteTotalXp != _totalXpEarned) {
-          _parseStateFromJson(remoteData);
-          notifyListeners();
-        }
-      }
-    } catch (e) {
-      debugPrint('Real-time remote sync warning: $e');
-    } finally {
-      _isSyncing = false;
-    }
-  }
-
-  // Load state: Fetches from MongoDB if online, otherwise falls back to local SharedPreferences cache
+  // Load state: Fetches local SharedPreferences, then connects and syncs via WebSockets
   Future<void> _loadState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // First, attempt to retrieve from remote MongoDB database
-      final remoteData = await MongoDBService.fetchPlayerState();
-      if (remoteData != null) {
-        _parseStateFromJson(remoteData);
-        _addNotification('DATABASE CONNECTED', 'SYSTEM database sync established with MongoDB.');
-        await _saveState(syncToRemote: false);
-        notifyListeners();
-        return;
-      }
+      // Read server address configuration first
+      _serverAddress = prefs.getString('serverAddress') ?? 'localhost:8080';
 
-      // If remote database fetch fails or is offline, load from local SharedPreferences cache
-      _addNotification('DATABASE OFFLINE', 'Running in Local Cache mode. Syncing on reconnect.');
-      
+      // Connect WebSocket to Java backend
+      _syncService.connect();
+
+      // Load instant local cache first
       final localDataStr = prefs.getString('local_player_state');
       if (localDataStr != null) {
         final decoded = jsonDecode(localDataStr) as Map<String, dynamic>;
@@ -964,10 +968,13 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
-  // Save state: writes to local SharedPreferences and asynchronously uploads to MongoDB
+  // Save state: writes to local cache, then pushes through WebSocket outbox
   Future<void> _saveState({bool syncToRemote = true}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
+
+      // Cache server address
+      await prefs.setString('serverAddress', _serverAddress);
 
       final Map<String, dynamic> stateMap = {
         'playerName': _playerName,
@@ -976,6 +983,7 @@ class GameProvider extends ChangeNotifier {
         'characterXp': _characterXp,
         'isSoundEnabled': _isSoundEnabled,
         'activeThemeIndex': _activeThemeIndex,
+        'serverAddress': _serverAddress,
         'totalXpEarned': _totalXpEarned,
         'questsCompletedCount': _questsCompletedCount,
         'punishmentsResolvedCount': _punishmentsResolvedCount,
@@ -995,13 +1003,9 @@ class GameProvider extends ChangeNotifier {
       // Save local cache
       await prefs.setString('local_player_state', jsonEncode(stateMap));
 
-      // Asynchronously upload state to MongoDB Data API
+      // Push real-time update through WebSockets outbox
       if (syncToRemote) {
-        MongoDBService.savePlayerState(stateMap).then((success) {
-          if (!success) {
-            debugPrint("Remote sync failed. Saved to local cache.");
-          }
-        });
+        _syncService.sendState(stateMap);
       }
     } catch (e) {
       debugPrint("Error saving state: $e");
@@ -1021,6 +1025,7 @@ class GameProvider extends ChangeNotifier {
     _longestStreak = 0;
     _totalDaysPlayed = 1;
     _consecutiveCleanDays = 0;
+    _serverAddress = 'localhost:8080';
 
     _stats.forEach((key, value) {
       value.level = 1;
